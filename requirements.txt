@@ -1,3 +1,6 @@
 pyTelegramBotAPI
 Flask
 openai
+ddgs
+requests
+beautifulsoup4
