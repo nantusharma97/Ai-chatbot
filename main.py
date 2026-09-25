@@ -37,7 +37,7 @@ client = OpenAI(
     base_url="https://router.huggingface.co/v1",
     api_key=HF_TOKEN,
 )
-MODEL = "meta-llama/Llama-3.1-8B-Instruct:novita"
+MODEL = "deepseek-ai/DeepSeek-R1"
 # Vision model for photos. Override with a VISION_MODEL env var if this one is unavailable.
 VISION_MODEL = os.environ.get("VISION_MODEL", "Qwen/Qwen3.6-27B:ovhcloud")
 BOT_NAME = "Flux"
