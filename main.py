@@ -262,13 +262,22 @@ def answer_link(chat_id, user_text, url):
         page = fetch_page(url)
     except Exception as e:
         return f"Sorry, I couldn't open that link: {str(e)[:150]}"
+
+    title_line = page.split("\n", 1)[0]  # "Title: ..."
     history = load_history(chat_id)
     extra = (
-        f"\n\nThe user shared this link: {url}\nPage content (may be truncated):\n{page}\n\n"
-        "Base your answer on this page content. If the user sent only the link, give a concise "
-        "summary with the key points. If the content is unclear, say so."
+        f"\n\nThe user shared this link: {url}\n"
+        f"Below is the ACTUAL extracted page content (may be incomplete or contain leftover menu/"
+        f"related-article text). Do not use anything you already know about this URL, this topic, "
+        f"or this publication date from your training data - only use what is literally written "
+        f"below. If the extracted text is boilerplate, a cookie/consent notice, a paywall message, "
+        f"or otherwise doesn't contain the actual article, say exactly that instead of guessing or "
+        f"summarizing from memory.\n\n{page}\n\n"
+        "If the user sent only the link, give a concise summary with the key points from the text "
+        "above."
     )
-    return chat_reply(chat_id, history, user_text, extra)
+    reply = chat_reply(chat_id, history, user_text, extra)
+    return f"📄 {title_line}\n\n{reply}"
 
 
 def answer_photo(chat_id, message):
@@ -278,6 +287,99 @@ def answer_photo(chat_id, message):
     question = message.caption or "Describe this image in detail."
 
     history = load_history(chat_id)
+    completion = client.chat.completions.create(
+        model=VISION_MODEL,
+        messages=[{"role": "system", "content": system_prompt()}]
+        + history[-6:]
+        + [{
+            "role": "user",
+            "content": [
+                {"type": "text", "text": question},
+                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
+            ],
+        }],
+    )
+    reply = completion.choices[0].message.content or "(empty response)"
+    # Save as text so follow-up questions still have context
+    history.append({"role": "user", "content": f"[Photo] {question}"})
+    history.append({"role": "assistant", "content": reply})
+    save_history(chat_id, history)
+    return reply
+
+
+def send_long(chat_id, text):
+    # Telegram limit is 4096 characters per message
+    for i in range(0, len(text), 4000):
+        bot.send_message(chat_id, text[i:i + 4000])
+
+
+# ---------- Telegram handlers ----------
+@bot.message_handler(commands=["start", "help"])
+def handle_start(message):
+    bot.reply_to(
+        message,
+        f"Hi! I'm {BOT_NAME} ⚡ - your AI assistant.\n\n"
+        "• Ask me anything - I search the web when I need the latest info\n"
+        "• Send a link and I'll summarize the page\n"
+        "• Send a photo (add a caption to ask about it)\n"
+        "• /reset clears our conversation",
+    )
+
+
+@bot.message_handler(commands=["reset"])
+def handle_reset(message):
+    clear_history(message.chat.id)
+    bot.reply_to(message, "Conversation cleared.")
+
+
+@bot.message_handler(content_types=["photo"])
+def handle_photo(message):
+    chat_id = message.chat.id
+    try:
+        bot.send_chat_action(chat_id, "typing")
+        send_long(chat_id, answer_photo(chat_id, message))
+    except Exception as e:
+        print("Photo error:", e)
+        bot.send_message(chat_id, "Sorry, I couldn't analyze that image. Please try again.")
+
+
+@bot.message_handler(content_types=["text"])
+def handle_text(message):
+    chat_id = message.chat.id
+    try:
+        bot.send_chat_action(chat_id, "typing")
+        url = find_url(message.text)
+        reply = answer_link(chat_id, message.text, url) if url else ask_flux(chat_id, message.text)
+        send_long(chat_id, reply)
+    except Exception as e:
+        print("Error:", e)
+        bot.send_message(chat_id, "Sorry, something went wrong. Please try again.")
+
+
+# ---------- Webhook routes ----------
+@app.route("/", methods=["GET"])
+def index():
+    return f"{BOT_NAME} is running", 200
+
+
+@app.route(f"/{BOT_TOKEN}", methods=["POST"])
+def webhook():
+    update = telebot.types.Update.de_json(request.get_data().decode("utf-8"))
+    bot.process_new_updates([update])
+    return "OK", 200
+
+
+if __name__ == "__main__":
+    if RENDER_URL:
+        bot.remove_webhook()
+        bot.set_webhook(url=f"{RENDER_URL}/{BOT_TOKEN}")
+        app.run(host="0.0.0.0", port=PORT)
+    else:
+        # Local testing fallback: long polling
+        bot.remove_webhook()
+        print("RENDER_EXTERNAL_URL not set - running with polling")
+        bot.infinity_polling()
+history = load_history(chat_id)
     completion = client.chat.completions.create(
         model=VISION_MODEL,
         messages=[{"role": "system", "content": system_prompt()}]
